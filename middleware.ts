@@ -66,7 +66,7 @@ export async function middleware(request: NextRequest) {
   if (token && isRootOrAuth) {
     const parsed = decodeTokenPayload(token);
     const destination = parsed?.psCode
-      ? `${FULL_BASE_PATH}/logs`
+      ? `${FULL_BASE_PATH}/`
       : `${FULL_BASE_PATH}/select-context`;
     return NextResponse.redirect(new URL(destination, request.url));
   }

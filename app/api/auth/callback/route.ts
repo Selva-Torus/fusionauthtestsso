@@ -75,7 +75,7 @@ export async function GET(request: NextRequest) {
     const { token, redirectToORPSelector } = await torusRes.json();
     const destination = redirectToORPSelector
       ? `${FULL_BASE_PATH}/select-context`
-      : `${FULL_BASE_PATH}/logs`;
+      : `${FULL_BASE_PATH}/`;
 
     const response = NextResponse.redirect(new URL(destination, request.url));
     response.cookies.set(`${COOKIE_PREFIX}_token`, token, {
