@@ -1,92 +1,97 @@
 // app/api/auth/callback/route.ts
-import { NextRequest, NextResponse } from 'next/server'
-import { exchangeCodeForTokens } from '@/lib/fusionauth'
+import { NextRequest, NextResponse } from "next/server";
+import { exchangeCodeForTokens } from "@/lib/fusionauth";
+
+const FULL_BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+
+export const COOKIE_PREFIX = FULL_BASE_PATH.replace(/^\/|\/$/g, "").replace(
+  /\//g,
+  "_",
+);
 
 export async function GET(request: NextRequest) {
-  const { searchParams } = request.nextUrl
-  const code = searchParams.get('code')
-  const state = searchParams.get('state')
-  const error = searchParams.get('error')
-  const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? ''
+  const { searchParams } = request.nextUrl;
+  const code = searchParams.get("code");
+  const state = searchParams.get("state");
+  const error = searchParams.get("error");
 
-  // FusionAuth returned an error (user cancelled, etc.)
   if (error) {
-    return NextResponse.redirect(new URL(`${basePath}/?error=${error}`, request.url))
+    return NextResponse.redirect(
+      new URL(`${FULL_BASE_PATH}/?error=${error}`, request.url),
+    );
   }
 
   if (!code || !state) {
-    return NextResponse.redirect(new URL(`${basePath}/`, request.url))
+    return NextResponse.redirect(new URL(`${FULL_BASE_PATH}/`, request.url));
   }
 
-  // Retrieve PKCE verifier and validate state from cookie
-  const storedState = request.cookies.get('oauth_state')?.value
-  const codeVerifier = request.cookies.get('oauth_code_verifier')?.value
-
-  if (!storedState || storedState !== state || !codeVerifier) {
-    return NextResponse.redirect(new URL(`${basePath}/?error=invalid_state`, request.url))
+  // Validate state
+  const storedState = request.cookies.get(`${COOKIE_PREFIX}_oauth_state`)?.value;
+  if (!storedState || storedState !== state) {
+    return NextResponse.redirect(
+      new URL(`${FULL_BASE_PATH}/?error=invalid_state`, request.url),
+    );
   }
 
   try {
-    // 1. Exchange code for FusionAuth tokens
-    const fusionAuthTokens = await exchangeCodeForTokens(code, codeVerifier)
+    // 1. Exchange code for tokens
+    const fusionAuthTokens = await exchangeCodeForTokens(code);
 
-    // 2. Get user info from the id_token or userinfo endpoint
+    console.log(fusionAuthTokens, "fusionAuthTokens");
+
+    // 2. Get user info
     const userInfoRes = await fetch(
       `${process.env.AUTH_FUSIONAUTH_ISSUER}/oauth2/userinfo`,
-      { headers: { Authorization: `Bearer ${fusionAuthTokens.access_token}` } }
-    )
-    const userInfo = await userInfoRes.json()
-    const username = userInfo.email ?? userInfo.preferred_username
+      { headers: { Authorization: `Bearer ${fusionAuthTokens.access_token}` } },
+    );
+    const userInfo = await userInfoRes.json();
+    const username = userInfo.email ?? userInfo.preferred_username;
 
-    // 3. Call your Torus backend — pass fusionAuthTokens so refresh_token is preserved
+    // 3. Call your Torus backend
     const torusRes = await fetch(
-      `${process.env.NEXT_PUBLIC_TORUS_API_URL}/auth/oauth-signin`,
+      `${process.env.NEXT_PUBLIC_TORUS_API_URL}/UF/signin`,
       {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           username,
-          ufClientType: 'UFW',
+          ufClientType: "UFW",
           isOauthUser: true,
-          fusionAuthLoginResponse: fusionAuthTokens, // contains refresh_token, refresh_token_id
+          fusionAuthLoginResponse: fusionAuthTokens,
         }),
-      }
-    )
+      },
+    );
 
     if (!torusRes.ok) {
-      const errBody = await torusRes.json().catch(() => ({}))
-      const errMsg = errBody?.message ?? 'auth_failed'
+      const errBody = await torusRes.json().catch(() => ({}));
       return NextResponse.redirect(
-        new URL(`${basePath}/?error=${encodeURIComponent(errMsg)}`, request.url)
-      )
+        new URL(
+          `${FULL_BASE_PATH}/?error=${encodeURIComponent(errBody?.message ?? "auth_failed")}`,
+          request.url,
+        ),
+      );
     }
 
-    const { token, redirectToORPSelector } = await torusRes.json()
-
-    // 4. Set your Torus token cookie and clean up PKCE cookies
+    const { token, redirectToORPSelector } = await torusRes.json();
     const destination = redirectToORPSelector
-      ? `${basePath}/select-context`
-      : `${basePath}/logs` // or your landingScreen logic
+      ? `${FULL_BASE_PATH}/select-context`
+      : `${FULL_BASE_PATH}/logs`;
 
-    const response = NextResponse.redirect(new URL(destination, request.url))
-
-    response.cookies.set('token', token, {
+    const response = NextResponse.redirect(new URL(destination, request.url));
+    response.cookies.set(`${COOKIE_PREFIX}_token`, token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      path: '/',
-      maxAge: 60 * 60 * 8, // 8 hours — align with your accessTokenExpiryTime
-    })
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      path: "/",
+      maxAge: 60 * 60 * 8,
+    });
+    response.cookies.delete(`${COOKIE_PREFIX}_oauth_state`);
 
-    // Clean up PKCE cookies
-    response.cookies.delete('oauth_state')
-    response.cookies.delete('oauth_code_verifier')
-
-    return response
+    return response;
   } catch (err: any) {
-    console.error('Callback error:', err)
+    console.error("Callback error:", err);
     return NextResponse.redirect(
-      new URL(`${basePath}/?error=server_error`, request.url)
-    )
+      new URL(`${FULL_BASE_PATH}/?error=server_error`, request.url),
+    );
   }
 }

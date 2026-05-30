@@ -7,7 +7,8 @@ export const fusionAuthConfig = {
   redirectUri: `${process.env.NEXT_PUBLIC_APP_URL}${process.env.NEXT_PUBLIC_BASE_PATH}/api/auth/callback`,
 }
 
-export function buildAuthorizationUrl(state: string, codeChallenge: string) {
+// No PKCE — simple authorization URL
+export function buildAuthorizationUrl(state: string) {
   const params = new URLSearchParams({
     response_type: 'code',
     client_id: fusionAuthConfig.clientId,
@@ -15,20 +16,17 @@ export function buildAuthorizationUrl(state: string, codeChallenge: string) {
     scope: 'openid profile email offline_access',
     tenantId: fusionAuthConfig.tenantId,
     state,
-    code_challenge: codeChallenge,
-    code_challenge_method: 'S256',
   })
   return `${fusionAuthConfig.baseUrl}/oauth2/authorize?${params.toString()}`
 }
 
-export async function exchangeCodeForTokens(code: string, codeVerifier: string) {
+export async function exchangeCodeForTokens(code: string) {
   const params = new URLSearchParams({
     grant_type: 'authorization_code',
     code,
     redirect_uri: fusionAuthConfig.redirectUri,
     client_id: fusionAuthConfig.clientId,
     client_secret: fusionAuthConfig.clientSecret,
-    code_verifier: codeVerifier,
   })
 
   const res = await fetch(`${fusionAuthConfig.baseUrl}/oauth2/token`, {

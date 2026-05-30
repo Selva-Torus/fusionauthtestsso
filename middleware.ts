@@ -1,97 +1,82 @@
 // middleware.ts
-import { NextRequest, NextResponse } from 'next/server'
-import { buildAuthorizationUrl } from '@/lib/fusionauth'
+import { NextRequest, NextResponse } from "next/server";
+import { buildAuthorizationUrl } from "@/lib/fusionauth";
 
-const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? ''
+const FULL_BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 
-// Routes that don't require authentication
-const PUBLIC_PATHS = [
-  `${BASE_PATH}/api/auth/callback`,
-  `${BASE_PATH}/api/auth/logout`,
-  `${BASE_PATH}/api/`, // allow all api routes to pass through
-]
-
-function isPublicPath(pathname: string) {
-  return PUBLIC_PATHS.some((p) => pathname.startsWith(p))
-}
-
-// ---- PKCE helpers (must be Edge-compatible, no Node APIs) ----
+export const COOKIE_PREFIX = FULL_BASE_PATH.replace(/^\/|\/$/g, "").replace(
+  /\//g,
+  "_",
+);
 function generateRandomString(length: number): string {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~'
-  const array = new Uint8Array(length)
-  crypto.getRandomValues(array)
-  return Array.from(array).map((b) => chars[b % chars.length]).join('')
+  const chars =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  const array = new Uint8Array(length);
+  crypto.getRandomValues(array);
+  return Array.from(array)
+    .map((b) => chars[b % chars.length])
+    .join("");
 }
 
-async function generateCodeChallenge(verifier: string): Promise<string> {
-  const data = new TextEncoder().encode(verifier)
-  const digest = await crypto.subtle.digest('SHA-256', data)
-  return btoa(String.fromCharCode(...new Uint8Array(digest)))
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-}
-
-// ---- Token decode (no crypto needed, just base64) ----
 function decodeTokenPayload(token: string): any {
   try {
-    const payload = token.split('.')[1]
-    return JSON.parse(Buffer.from(payload, 'base64').toString('utf8'))
+    return JSON.parse(
+      Buffer.from(token.split(".")[1], "base64").toString("utf8"),
+    );
   } catch {
-    return null
+    return null;
   }
-}
-
-function getLandingScreen(token: string): string {
-  const parsed = decodeTokenPayload(token)
-  if (parsed?.psCode) return `${BASE_PATH}/logs`
-  return `${BASE_PATH}/select-context`
 }
 
 export async function middleware(request: NextRequest) {
-  const { pathname } = request.nextUrl
-  const token = request.cookies.get('token')?.value
+  const { pathname } = request.nextUrl;
 
-  // Always allow public/api paths through
-  if (isPublicPath(pathname)) {
-    return NextResponse.next()
+  // ── Always bypass these paths ────────────────────────────────────────────
+  if (
+    pathname.includes("/api/auth/callback") ||
+    pathname.includes("/api/auth/logout") ||
+    pathname.startsWith("/_next") ||
+    pathname.startsWith("/api/")
+  ) {
+    return NextResponse.next();
   }
 
-  // ── Unauthenticated: redirect to FusionAuth ──────────────────────────────
+  const token = request.cookies.get(`${COOKIE_PREFIX}_token`)?.value;
+  const isRootOrAuth =
+    pathname === FULL_BASE_PATH ||
+    pathname === `${FULL_BASE_PATH}/` ||
+    pathname === `${FULL_BASE_PATH}/forgot-password`;
+
+  // ── No token → redirect to FusionAuth ───────────────────────────────────
   if (!token) {
-    const state = generateRandomString(32)
-    const codeVerifier = generateRandomString(64)
-    const codeChallenge = await generateCodeChallenge(codeVerifier)
-
-    const authUrl = buildAuthorizationUrl(state, codeChallenge)
-    const response = NextResponse.redirect(authUrl)
-
-    // Store PKCE values in short-lived cookies for the callback to verify
-    const cookieOpts = {
+    const state = generateRandomString(32);
+    const authUrl = buildAuthorizationUrl(state);
+    const response = NextResponse.redirect(authUrl);
+    response.cookies.set(`${COOKIE_PREFIX}_oauth_state`, state, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax' as const,
-      path: '/',
-      maxAge: 60 * 10, // 10 minutes — enough for login flow
-    }
-    response.cookies.set('oauth_state', state, cookieOpts)
-    response.cookies.set('oauth_code_verifier', codeVerifier, cookieOpts)
-
-    return response
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      path: "/",
+      maxAge: 60 * 10,
+    });
+    return response;
   }
 
-  // ── Authenticated: redirect away from root / auth entry points ───────────
-  const isRootOrAuth = pathname === `${BASE_PATH}/` || pathname === BASE_PATH || pathname === `${BASE_PATH}/forgot-password`
+  // ── Has token + on auth route → redirect to app ──────────────────────────
   if (token && isRootOrAuth) {
-    return NextResponse.redirect(
-      new URL(getLandingScreen(token), request.url)
-    )
+    const parsed = decodeTokenPayload(token);
+    const destination = parsed?.psCode
+      ? `${FULL_BASE_PATH}/logs`
+      : `${FULL_BASE_PATH}/select-context`;
+    return NextResponse.redirect(new URL(destination, request.url));
   }
 
-  return NextResponse.next()
+  return NextResponse.next();
 }
 
 export const config = {
   matcher: [
-    '/((?!_next/static|_next/image|robots.txt|public|images|manifest.json|sw.js|favicon.ico|workbox-*).*)',
-    '/',
+    "/((?!api/auth/callback|api/auth/logout|_next/static|_next/image|robots.txt|public|images|manifest.json|sw.js|favicon.ico|workbox-*).*)",
+    "/",
   ],
-}
+};
